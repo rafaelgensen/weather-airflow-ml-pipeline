@@ -1,30 +1,6 @@
 # Weather Data Processing & ML Pipeline
 
-```mermaid
-flowchart LR
-
-    subgraph Ingestion
-        L[Lambda<br>Open-Meteo API] --> S3Raw[(S3 Raw)]
-    end
-
-    subgraph Orchestration
-        A[Airflow on ECS/Fargate] -->|Triggers| L
-        A -->|Triggers| DTransform
-        A -->|Triggers| DMLTrain
-        A -->|Triggers| DMLInfer
-    end
-
-    subgraph Databricks
-        DTransform[Databricks Job<br>Transformations] --> S3Processed[(S3 Processed)]
-        DMLTrain[Databricks Job<br>ML Training] --> DBFSModel[(DBFS Model Artifact)]
-        DMLInfer[Databricks Job<br>Batch Inference] --> S3Output[(S3 ML Output)]
-    end
-
-    S3Raw --> DTransform
-    S3Processed --> DMLTrain
-    S3Processed --> DMLInfer
-    DBFSModel --> DMLInfer
-```
+![Project Cover](./assets/architecture.png)
 
 ## Objective
 Build a production-ready pipeline that ingests public weather data, orchestrates all processing stages through a structured Airflow workflow running on Docker-based infrastructure, and executes a compact ML cycle—feature preparation, training, and batch inference—delivering finalized prediction outputs to S3.
