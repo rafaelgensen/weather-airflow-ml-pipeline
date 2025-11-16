@@ -69,7 +69,7 @@ jobs:
 
       - name: Build and Push Airflow Image
         run: |
-          docker build -t "${IMAGE_URI}" ./airflow/docker
+          docker build -t "${IMAGE_URI}" ./airflow
           docker push "${IMAGE_URI}"
 
       - name: Export image for Terraform
