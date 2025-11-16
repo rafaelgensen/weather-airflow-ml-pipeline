@@ -1,6 +1,5 @@
 variable "databricks_host" {
-  type        = string
-  description = "Databricks workspace URL"
+  type = string
 }
 
 variable "databricks_token" {
@@ -15,5 +14,5 @@ variable "node_type" {
 
 variable "project_id" {
   type        = string
-  description = "AWS Account ID for bucket naming"
+  description = "AWS Account ID"
 }

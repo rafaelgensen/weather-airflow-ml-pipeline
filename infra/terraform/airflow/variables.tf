@@ -3,8 +3,7 @@ variable "region" {
 }
 
 variable "project_id" {
-  type        = string
-  description = "AWS Account ID"
+  type = string
 }
 
 variable "airflow_image" {
@@ -26,33 +25,9 @@ variable "db_name" {
 }
 
 variable "ecs_execution_role" {
-  type        = string
-  description = "IAM execution role ARN for ECS tasks"
+  type = string
 }
 
 variable "ecs_task_role" {
-  type        = string
-  description = "IAM task role ARN for ECS tasks"
-}
-
-variable "databricks_host" {
-  type        = string
-  description = "Databricks workspace URL (full, e.g. https://abc.cloud.databricks.com)"
-}
-
-variable "databricks_token" {
-  type      = string
-  sensitive = true
-}
-
-variable "databricks_transform_job_id" {
-  type = string
-}
-
-variable "databricks_train_job_id" {
-  type = string
-}
-
-variable "databricks_infer_job_id" {
   type = string
 }

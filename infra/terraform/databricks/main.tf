@@ -1,12 +1,6 @@
-# databricks module - main.tf
-# Expects:
-# - var.databricks_host
-# - var.databricks_token
-# - var.node_type
-# - var.project_id
-# Will upload three notebooks and create three jobs (transform, train, infer)
-
 terraform {
+  required_version = ">= 1.0"
+
   required_providers {
     databricks = {
       source  = "databricks/databricks"
@@ -20,26 +14,31 @@ provider "databricks" {
   token = var.databricks_token
 }
 
-# Upload notebooks (reads files from module ../notebooks)
+# -------------------------------------------------------------------
+# NOTEBOOK UPLOADS
+# -------------------------------------------------------------------
+
 resource "databricks_notebook" "transform" {
-  path          = "/Shared/weather_transform"
-  language      = "PYTHON"
+  path           = "/Shared/weather_transform"
+  language       = "PYTHON"
   content_base64 = filebase64("${path.module}/../notebooks/transform.py")
 }
 
 resource "databricks_notebook" "ml_train" {
-  path          = "/Shared/weather_ml_train"
-  language      = "PYTHON"
+  path           = "/Shared/weather_ml_train"
+  language       = "PYTHON"
   content_base64 = filebase64("${path.module}/../notebooks/ml_train.py")
 }
 
 resource "databricks_notebook" "ml_infer" {
-  path          = "/Shared/weather_ml_infer"
-  language      = "PYTHON"
+  path           = "/Shared/weather_ml_infer"
+  language       = "PYTHON"
   content_base64 = filebase64("${path.module}/../notebooks/ml_inference.py")
 }
 
-# Transform job
+# -------------------------------------------------------------------
+# TRANSFORM JOB
+# -------------------------------------------------------------------
 resource "databricks_job" "transform_job" {
   name = "weather-transform-job"
 
@@ -47,7 +46,7 @@ resource "databricks_job" "transform_job" {
     job_cluster_key = "transform_cluster"
 
     new_cluster {
-      num_workers  = 1
+      num_workers   = 1
       spark_version = "13.3.x-scala2.12"
       node_type_id  = var.node_type
     }
@@ -67,7 +66,9 @@ resource "databricks_job" "transform_job" {
   }
 }
 
-# Train job
+# -------------------------------------------------------------------
+# TRAIN JOB
+# -------------------------------------------------------------------
 resource "databricks_job" "train_job" {
   name = "weather-train-job"
 
@@ -75,7 +76,7 @@ resource "databricks_job" "train_job" {
     job_cluster_key = "train_cluster"
 
     new_cluster {
-      num_workers  = 1
+      num_workers   = 1
       spark_version = "13.3.x-scala2.12"
       node_type_id  = var.node_type
     }
@@ -95,7 +96,9 @@ resource "databricks_job" "train_job" {
   }
 }
 
-# Inference job
+# -------------------------------------------------------------------
+# INFERENCE JOB
+# -------------------------------------------------------------------
 resource "databricks_job" "infer_job" {
   name = "weather-infer-job"
 
@@ -103,7 +106,7 @@ resource "databricks_job" "infer_job" {
     job_cluster_key = "infer_cluster"
 
     new_cluster {
-      num_workers  = 1
+      num_workers   = 1
       spark_version = "13.3.x-scala2.12"
       node_type_id  = var.node_type
     }
@@ -121,24 +124,4 @@ resource "databricks_job" "infer_job" {
 
     job_cluster_key = "infer_cluster"
   }
-}
-
-output "databricks_transform_job_id" {
-  value = databricks_job.transform_job.id
-}
-
-output "databricks_train_job_id" {
-  value = databricks_job.train_job.id
-}
-
-output "databricks_infer_job_id" {
-  value = databricks_job.infer_job.id
-}
-
-output "uploaded_notebooks" {
-  value = [
-    databricks_notebook.transform.path,
-    databricks_notebook.ml_train.path,
-    databricks_notebook.ml_infer.path
-  ]
 }

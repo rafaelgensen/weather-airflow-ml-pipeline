@@ -4,8 +4,7 @@ variable "region" {
 }
 
 variable "project_id" {
-  type        = string
-  description = "AWS Account ID"
+  type = string
 }
 
 variable "db_username" {
@@ -19,18 +18,16 @@ variable "db_password" {
 }
 
 variable "airflow_image" {
-  type    = string
-  default = "public.ecr.aws/apache/airflow:2.9.1-python3.10"
+  type = string
 }
 
 variable "databricks_host" {
-  type        = string
-  description = "Databricks workspace URL"
+  type = string
 }
 
 variable "databricks_token" {
-  type        = string
-  sensitive   = true
+  type      = string
+  sensitive = true
 }
 
 variable "databricks_node_type" {

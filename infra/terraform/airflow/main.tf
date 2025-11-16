@@ -1,21 +1,26 @@
-# airflow module - main.tf
-# This module expects to receive:
-# - var.region
-# - var.project_id
-# - var.airflow_image
-# - var.db_username, var.db_password, var.db_name
-# - var.ecs_execution_role, var.ecs_task_role (ARNs)
-# - var.databricks_host, var.databricks_token
-# - var.databricks_transform_job_id, var.databricks_train_job_id, var.databricks_infer_job_id
+terraform {
+  required_version = ">= 1.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
 
 locals {
   ecs_execution_role_arn = var.ecs_execution_role
   ecs_task_role_arn      = var.ecs_task_role
-  # remove https:// if present for AIRFLOW_CONN
-  databricks_host_clean  = replace(var.databricks_host, "https://", "")
-  databricks_conn_uri    = "databricks://token:${var.databricks_token}@${local.databricks_host_clean}"
 }
 
+# -------------------------------
+# DEFAULT VPC
+# -------------------------------
 data "aws_vpc" "default" {
   default = true
 }
@@ -27,11 +32,17 @@ data "aws_subnets" "default" {
   }
 }
 
+# -------------------------------
+# LOG GROUP
+# -------------------------------
 resource "aws_cloudwatch_log_group" "airflow" {
   name              = "/ecs/airflow"
   retention_in_days = 7
 }
 
+# -------------------------------
+# SECURITY GROUPS
+# -------------------------------
 resource "aws_security_group" "airflow_ecs" {
   name        = "airflow-ecs-sg"
   description = "SG for ECS Airflow tasks"
@@ -47,7 +58,7 @@ resource "aws_security_group" "airflow_ecs" {
 
 resource "aws_security_group" "airflow_db" {
   name        = "airflow-db-sg"
-  description = "SG for RDS Postgres"
+  description = "SG for RDS"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -58,18 +69,21 @@ resource "aws_security_group" "airflow_db" {
   }
 }
 
+# -------------------------------
+# RDS
+# -------------------------------
 resource "aws_db_subnet_group" "default_subnets" {
   name       = "airflow-default-subnets"
   subnet_ids = data.aws_subnets.default.ids
 }
 
 resource "aws_db_instance" "airflow" {
-  identifier              = "airflow-db"
-  engine                  = "postgres"
-  instance_class          = "db.t3.micro"
-  allocated_storage       = 20
-  db_subnet_group_name    = aws_db_subnet_group.default_subnets.name
-  vpc_security_group_ids  = [aws_security_group.airflow_db.id]
+  identifier             = "airflow-db"
+  engine                 = "postgres"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  db_subnet_group_name   = aws_db_subnet_group.default_subnets.name
+  vpc_security_group_ids = [aws_security_group.airflow_db.id]
 
   username = var.db_username
   password = var.db_password
@@ -78,10 +92,16 @@ resource "aws_db_instance" "airflow" {
   publicly_accessible = false
 }
 
+# -------------------------------
+# ECS CLUSTER
+# -------------------------------
 resource "aws_ecs_cluster" "airflow" {
   name = "airflow-cluster"
 }
 
+# -------------------------------
+# ECS TASK DEFINITION
+# -------------------------------
 resource "aws_ecs_task_definition" "airflow" {
   family                   = "airflow"
   network_mode             = "awsvpc"
@@ -97,21 +117,20 @@ resource "aws_ecs_task_definition" "airflow" {
       name  = "airflow"
       image = var.airflow_image
 
-      portMappings = [
-        {
-          containerPort = 8080
-          hostPort      = 8080
-        }
-      ]
+      portMappings = [{
+        containerPort = 8080
+        hostPort      = 8080
+      }]
 
       environment = [
-        { name = "AIRFLOW__CORE__EXECUTOR", value = "LocalExecutor" },
-        { name = "AIRFLOW__CORE__SQL_ALCHEMY_CONN", value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.airflow.address}:5432/${var.db_name}" },
-        { name = "PROJECT_ID", value = var.project_id },
-        { name = "DATABRICKS_TRANSFORM_JOB_ID", value = var.databricks_transform_job_id },
-        { name = "DATABRICKS_TRAIN_JOB_ID", value = var.databricks_train_job_id },
-        { name = "DATABRICKS_INFER_JOB_ID", value = var.databricks_infer_job_id },
-        { name = "AIRFLOW_CONN_DATABRICKS_DEFAULT", value = local.databricks_conn_uri }
+        {
+          name  = "AIRFLOW__CORE__EXECUTOR"
+          value = "LocalExecutor"
+        },
+        {
+          name  = "AIRFLOW__CORE__SQL_ALCHEMY_CONN"
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.airflow.address}:5432/${var.db_name}"
+        }
       ]
 
       logConfiguration = {
@@ -126,6 +145,9 @@ resource "aws_ecs_task_definition" "airflow" {
   ])
 }
 
+# -------------------------------
+# ECS SERVICE
+# -------------------------------
 resource "aws_ecs_service" "airflow" {
   name            = "airflow-service"
   cluster         = aws_ecs_cluster.airflow.id
@@ -143,6 +165,9 @@ resource "aws_ecs_service" "airflow" {
   ]
 }
 
+# -------------------------------
+# OUTPUTS
+# -------------------------------
 output "airflow_rds_endpoint" {
   value = aws_db_instance.airflow.address
 }
