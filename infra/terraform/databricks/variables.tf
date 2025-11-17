@@ -3,8 +3,7 @@ variable "databricks_host" {
 }
 
 variable "databricks_token" {
-  type      = string
-  sensitive = true
+  type = string
 }
 
 variable "node_type" {

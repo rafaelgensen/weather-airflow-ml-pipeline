@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       destroy:
-        description: "Destroy resources?"
+        description: "Destroy resources first?"
         required: true
-        default: "false"
+        default: "true"
         type: choice
-        options: ["false", "true"]
+        options: ["true", "false"]
 
 permissions:
   contents: read
@@ -24,7 +24,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/heads/prod/') || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout
@@ -36,125 +35,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-
-      - name: Full Cleanup (Force Delete AWS Resources)
-        if: ${{ github.event.inputs.destroy == 'true' }}
-        run: |
-          echo "Starting full cleanup..."
-
-          set -e
-
-          # -------------------------
-          # ECS SERVICE + CLUSTER
-          # -------------------------
-          SERVICE_NAME="airflow-service"
-          CLUSTER_NAME="airflow-cluster"
-
-          if aws ecs describe-services --cluster "$CLUSTER_NAME" --services "$SERVICE_NAME" 2>/dev/null | grep -q '"status":'; then
-            aws ecs update-service --cluster "$CLUSTER_NAME" --service "$SERVICE_NAME" --desired-count 0 || true
-            sleep 10
-            aws ecs delete-service --cluster "$CLUSTER_NAME" --service "$SERVICE_NAME" --force || true
-          fi
-
-          if aws ecs describe-clusters --clusters "$CLUSTER_NAME" 2>/dev/null | grep -q '"status":'; then
-            aws ecs delete-cluster --cluster "$CLUSTER_NAME" || true
-          fi
-
-          # -------------------------
-          # DELETE ECS TASK DEFINITIONS
-          # -------------------------
-          for REV in $(aws ecs list-task-definitions --family-prefix airflow --query "taskDefinitionArns[]" --output text); do
-            aws ecs deregister-task-definition --task-definition "$REV" || true
-          done
-
-          # -------------------------
-          # RDS DELETE
-          # -------------------------
-          aws rds delete-db-instance \
-            --db-instance-identifier airflow-db \
-            --skip-final-snapshot || true
-
-          # -------------------------
-          # LOG GROUP
-          # -------------------------
-          aws logs delete-log-group --log-group-name "/ecs/airflow" || true
-
-          # -------------------------
-          # SECURITY GROUPS
-          # -------------------------
-          SG_IDS=$(aws ec2 describe-security-groups --query "SecurityGroups[?GroupName=='airflow-ecs-sg'].GroupId" --output text)
-          for SG in $SG_IDS; do
-            aws ec2 delete-security-group --group-id "$SG" || true
-          done
-
-          SG_IDS2=$(aws ec2 describe-security-groups --query "SecurityGroups[?GroupName=='airflow-db-sg'].GroupId" --output text)
-          for SG in $SG_IDS2; do
-            aws ec2 delete-security-group --group-id "$SG" || true
-          done
-
-          # -------------------------
-          # NETWORK INTERFACES (ENIs)
-          # -------------------------
-          ENIS=$(aws ec2 describe-network-interfaces \
-            --filters "Name=description,Values=AWS Fargate ENI*" \
-            --query "NetworkInterfaces[].NetworkInterfaceId" \
-            --output text)
-
-          for ENI in $ENIS; do
-            aws ec2 detach-network-interface --attachment-id \
-              $(aws ec2 describe-network-interfaces --network-interface-ids $ENI --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text) || true
-            sleep 3
-            aws ec2 delete-network-interface --network-interface-id $ENI || true
-          done
-
-          # -------------------------
-          # S3 BUCKETS
-          # -------------------------
-          aws s3 rb s3://raw-weather-${{ secrets.AWS_ACCOUNT_ID }} --force || true
-          aws s3 rb s3://processed-weather-${{ secrets.AWS_ACCOUNT_ID }} --force || true
-          aws s3 rb s3://ml-output-weather-${{ secrets.AWS_ACCOUNT_ID }} --force || true
-
-          # -------------------------
-          # IAM ROLES + POLICIES
-          # -------------------------
-          POLICIES=(
-            "airflow-access-policy"
-            "lambda-ingest-policy"
-            "databricks-s3-access"
-          )
-
-          for P in "${POLICIES[@]}"; do
-            ARN="arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:policy/$P"
-            ATTACHED=$(aws iam list-entities-for-policy --policy-arn "$ARN" --query "PolicyRoles[].RoleName" --output text || true)
-            for ROLE in $ATTACHED; do
-              aws iam detach-role-policy --role-name "$ROLE" --policy-arn "$ARN" || true
-            done
-            aws iam delete-policy --policy-arn "$ARN" || true
-          done
-
-          ROLES=(
-            "ecsTaskExecutionRole"
-            "airflow-task-role"
-            "lambda-ingest-role"
-            "databricks-instance-profile"
-          )
-
-          for R in "${ROLES[@]}"; do
-            # detach inline policies
-            POLS=$(aws iam list-attached-role-policies --role-name "$R" --query "AttachedPolicies[].PolicyArn" --output text || true)
-            for PA in $POLS; do
-              aws iam detach-role-policy --role-name "$R" --policy-arn "$PA" || true
-            done
-            aws iam delete-role --role-name "$R" || true
-          done
-
-          echo "Cleanup finished."
-
-
-      ###########################################################################
-      # CONTINUA COM EXPORT TF VARS / BUILD IMAGE / DEPLOY NORMAL
-      ###########################################################################
 
       - name: Export TF variables
         run: |
@@ -173,6 +53,7 @@ jobs:
           REPO=${{ env.ECR_REPO }}
           IMAGE_URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${SHORT_SHA}"
           echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
 
       - name: Ensure ECR repository exists
         run: |
@@ -203,6 +84,40 @@ jobs:
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: terraform init -input=false
 
+      ###############################################################
+      #   FULL CLEANUP BEFORE APPLY (THE CORRECT, DOCUMENTED WAY)   #
+      ###############################################################
+
+      - name: Remove drifted resources from state
+        if: ${{ github.event.inputs.destroy == 'true' }}
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: |
+          terraform state rm module.airflow.aws_cloudwatch_log_group.airflow || true
+          terraform state rm module.airflow.aws_security_group.airflow_ecs || true
+          terraform state rm module.airflow.aws_db_subnet_group.default_subnets || true
+          terraform state rm module.s3.aws_s3_bucket.raw || true
+          terraform state rm module.s3.aws_s3_bucket.processed || true
+          terraform state rm module.s3.aws_s3_bucket.ml_output || true
+          terraform state rm module.iam.aws_iam_role.ecs_execution_role || true
+          terraform state rm module.iam.aws_iam_role.airflow_task_role || true
+          terraform state rm module.iam.aws_iam_role.lambda_role || true
+          terraform state rm module.iam.aws_iam_role.databricks_instance_profile || true
+          terraform state rm module.iam.aws_iam_policy.airflow_policy || true
+          terraform state rm module.iam.aws_iam_policy.lambda_policy || true
+          terraform state rm module.iam.aws_iam_policy.databricks_s3_policy || true
+
+      - name: Terraform Destroy All
+        if: ${{ github.event.inputs.destroy == 'true' }}
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: terraform destroy -auto-approve
+
+      ###############################################
+      #                   APPLY                     #
+      ###############################################
+
       - name: Terraform Apply
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: terraform apply -auto-approve
+
+      - name: Done
+        run: echo "Finished."
