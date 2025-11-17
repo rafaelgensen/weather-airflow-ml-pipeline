@@ -19,17 +19,48 @@ locals {
 }
 
 # -------------------------------
-# DEFAULT VPC
+# VPC
 # -------------------------------
-data "aws_vpc" "default" {
-  default = true
+resource "aws_vpc" "airflow" {
+  cidr_block = "10.10.0.0/16"
 }
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
+resource "aws_internet_gateway" "airflow" {
+  vpc_id = aws_vpc.airflow.id
+}
+
+resource "aws_subnet" "subnet_a" {
+  vpc_id                  = aws_vpc.airflow.id
+  cidr_block              = "10.10.1.0/24"
+  availability_zone       = "${var.region}a"
+  map_public_ip_on_launch = true
+}
+
+resource "aws_subnet" "subnet_b" {
+  vpc_id                  = aws_vpc.airflow.id
+  cidr_block              = "10.10.2.0/24"
+  availability_zone       = "${var.region}b"
+  map_public_ip_on_launch = true
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.airflow.id
+}
+
+resource "aws_route" "igw_route" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.airflow.id
+}
+
+resource "aws_route_table_association" "subnet_a_assoc" {
+  subnet_id      = aws_subnet.subnet_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "subnet_b_assoc" {
+  subnet_id      = aws_subnet.subnet_b.id
+  route_table_id = aws_route_table.public.id
 }
 
 # -------------------------------
@@ -46,7 +77,7 @@ resource "aws_cloudwatch_log_group" "airflow" {
 resource "aws_security_group" "airflow_ecs" {
   name        = "airflow-ecs-sg"
   description = "SG for ECS Airflow tasks"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = aws_vpc.airflow.id
 
   egress {
     from_port   = 0
@@ -59,7 +90,7 @@ resource "aws_security_group" "airflow_ecs" {
 resource "aws_security_group" "airflow_db" {
   name        = "airflow-db-sg"
   description = "SG for RDS"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = aws_vpc.airflow.id
 
   ingress {
     from_port       = 5432
@@ -73,8 +104,11 @@ resource "aws_security_group" "airflow_db" {
 # RDS
 # -------------------------------
 resource "aws_db_subnet_group" "default_subnets" {
-  name       = "airflow-subnet-group-4"
-  subnet_ids = data.aws_subnets.default.ids
+  name       = "airflow-rds-subnets-2"
+  subnet_ids = [
+    aws_subnet.subnet_a.id,
+    aws_subnet.subnet_b.id
+  ]
 }
 
 resource "aws_db_instance" "airflow" {
@@ -156,7 +190,10 @@ resource "aws_ecs_service" "airflow" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = data.aws_subnets.default.ids
+    subnets = [
+      aws_subnet.subnet_a.id,
+      aws_subnet.subnet_b.id
+    ]
     security_groups = [aws_security_group.airflow_ecs.id]
   }
 
