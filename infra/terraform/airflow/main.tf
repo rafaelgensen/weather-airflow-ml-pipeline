@@ -18,31 +18,40 @@ locals {
   ecs_task_role_arn      = var.ecs_task_role
 }
 
-# -------------------------------
+# ---------------------------------------------------------
 # DEFAULT VPC
-# -------------------------------
+# ---------------------------------------------------------
 data "aws_vpc" "default" {
   default = true
 }
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
+# ---------------------------------------------------------
+# SUBNETS (CORREÇÃO: BUSCA POR SUBNETS EXISTENTES)
+# ---------------------------------------------------------
+data "aws_subnet_ids" "default" {
+  vpc_id = data.aws_vpc.default.id
 }
 
-# -------------------------------
+data "aws_subnet" "default" {
+  for_each = toset(data.aws_subnet_ids.default.ids)
+  id       = each.key
+}
+
+locals {
+  subnet_ids = [for s in data.aws_subnet.default : s.id]
+}
+
+# ---------------------------------------------------------
 # LOG GROUP
-# -------------------------------
+# ---------------------------------------------------------
 resource "aws_cloudwatch_log_group" "airflow" {
   name              = "/ecs/airflow"
   retention_in_days = 7
 }
 
-# -------------------------------
+# ---------------------------------------------------------
 # SECURITY GROUPS
-# -------------------------------
+# ---------------------------------------------------------
 resource "aws_security_group" "airflow_ecs" {
   name        = "airflow-ecs-sg-2"
   description = "SG for ECS Airflow tasks"
@@ -69,16 +78,16 @@ resource "aws_security_group" "airflow_db" {
   }
 }
 
-# -------------------------------
-# RDS — NOME TOTALMENTE NOVO
-# -------------------------------
+# ---------------------------------------------------------
+# RDS — SEM NOME CONFLITANTE
+# ---------------------------------------------------------
 resource "aws_db_subnet_group" "default_subnets" {
-  name       = "airflow-subnet-group-3"
-  subnet_ids = data.aws_subnets.default.ids
+  name       = "airflow-subnet-group-4"
+  subnet_ids = local.subnet_ids
 }
 
 resource "aws_db_instance" "airflow" {
-  identifier             = "airflow-db-3"
+  identifier             = "airflow-db-4"
   engine                 = "postgres"
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
@@ -93,16 +102,16 @@ resource "aws_db_instance" "airflow" {
   publicly_accessible = false
 }
 
-# -------------------------------
+# ---------------------------------------------------------
 # ECS CLUSTER
-# -------------------------------
+# ---------------------------------------------------------
 resource "aws_ecs_cluster" "airflow" {
   name = "airflow-cluster-2"
 }
 
-# -------------------------------
+# ---------------------------------------------------------
 # ECS TASK DEFINITION
-# -------------------------------
+# ---------------------------------------------------------
 resource "aws_ecs_task_definition" "airflow" {
   family                   = "airflow-2"
   network_mode             = "awsvpc"
@@ -144,9 +153,9 @@ resource "aws_ecs_task_definition" "airflow" {
   }])
 }
 
-# -------------------------------
+# ---------------------------------------------------------
 # ECS SERVICE
-# -------------------------------
+# ---------------------------------------------------------
 resource "aws_ecs_service" "airflow" {
   name            = "airflow-service-2"
   cluster         = aws_ecs_cluster.airflow.id
@@ -155,7 +164,7 @@ resource "aws_ecs_service" "airflow" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = data.aws_subnets.default.ids
+    subnets         = local.subnet_ids
     security_groups = [aws_security_group.airflow_ecs.id]
   }
 
