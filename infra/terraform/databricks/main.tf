@@ -1,3 +1,17 @@
+terraform {
+  required_providers {
+    databricks = {
+      source  = "databricks/databricks"
+      version = "~> 1.40.0"
+    }
+  }
+}
+
+provider "databricks" {
+  host  = var.databricks_host
+  token = var.databricks_token
+}
+
 resource "databricks_notebook" "transform" {
   path           = "/Shared/weather_transform"
   language       = "PYTHON"
