@@ -1,44 +1,21 @@
-terraform {
-  required_version = ">= 1.0"
-
-  required_providers {
-    databricks = {
-      source  = "databricks/databricks"
-      version = "~> 1.40.0"
-    }
-  }
-}
-
-provider "databricks" {
-  host  = var.databricks_host
-  token = var.databricks_token
-}
-
-# -------------------------------------------------------------------
-# NOTEBOOK UPLOADS
-# -------------------------------------------------------------------
-
 resource "databricks_notebook" "transform" {
   path           = "/Shared/weather_transform"
   language       = "PYTHON"
-  content_base64 = filebase64("${path.module}/../notebooks/transform.py")
+  content_base64 = filebase64("${path.module}/notebooks/transform.py")
 }
 
 resource "databricks_notebook" "ml_train" {
   path           = "/Shared/weather_ml_train"
   language       = "PYTHON"
-  content_base64 = filebase64("${path.module}/../notebooks/ml_train.py")
+  content_base64 = filebase64("${path.module}/notebooks/ml_train.py")
 }
 
 resource "databricks_notebook" "ml_infer" {
-  path           = "/Shared/weather_ml_infer"
+  path           = "/Shared/weather_ml_inference"
   language       = "PYTHON"
-  content_base64 = filebase64("${path.module}/../notebooks/ml_inference.py")
+  content_base64 = filebase64("${path.module}/notebooks/ml_inference.py")
 }
 
-# -------------------------------------------------------------------
-# TRANSFORM JOB
-# -------------------------------------------------------------------
 resource "databricks_job" "transform_job" {
   name = "weather-transform-job"
 
@@ -54,21 +31,16 @@ resource "databricks_job" "transform_job" {
 
   task {
     task_key = "transform_task"
-
     notebook_task {
       notebook_path = databricks_notebook.transform.path
       base_parameters = {
         project_id = var.project_id
       }
     }
-
     job_cluster_key = "transform_cluster"
   }
 }
 
-# -------------------------------------------------------------------
-# TRAIN JOB
-# -------------------------------------------------------------------
 resource "databricks_job" "train_job" {
   name = "weather-train-job"
 
@@ -84,21 +56,16 @@ resource "databricks_job" "train_job" {
 
   task {
     task_key = "train_task"
-
     notebook_task {
       notebook_path = databricks_notebook.ml_train.path
       base_parameters = {
         project_id = var.project_id
       }
     }
-
     job_cluster_key = "train_cluster"
   }
 }
 
-# -------------------------------------------------------------------
-# INFERENCE JOB
-# -------------------------------------------------------------------
 resource "databricks_job" "infer_job" {
   name = "weather-infer-job"
 
@@ -114,14 +81,12 @@ resource "databricks_job" "infer_job" {
 
   task {
     task_key = "infer_task"
-
     notebook_task {
       notebook_path = databricks_notebook.ml_infer.path
       base_parameters = {
         project_id = var.project_id
       }
     }
-
     job_cluster_key = "infer_cluster"
   }
 }

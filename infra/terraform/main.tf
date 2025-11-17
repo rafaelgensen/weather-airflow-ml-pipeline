@@ -48,9 +48,9 @@ module "databricks" {
   databricks_host  = var.databricks_host
   databricks_token = var.databricks_token
   node_type        = var.databricks_node_type
-
-  project_id = var.project_id
+  project_id       = var.project_id
 }
+
 
 # -------------------------------------------------------------------
 # LAMBDA

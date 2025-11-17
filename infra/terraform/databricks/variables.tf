@@ -3,8 +3,8 @@ variable "databricks_host" {
 }
 
 variable "databricks_token" {
-  type        = string
-  sensitive   = true
+  type      = string
+  sensitive = true
 }
 
 variable "node_type" {
@@ -13,6 +13,5 @@ variable "node_type" {
 }
 
 variable "project_id" {
-  type        = string
-  description = "AWS Account ID"
+  type = string
 }
