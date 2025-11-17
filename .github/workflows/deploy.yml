@@ -37,70 +37,77 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Full Cleanup Before Deploy
+
+      ###########################################################################
+      # FULL CLEANUP TOTAL — REMOVE ABSOLUTAMENTE TUDO
+      ###########################################################################
+      - name: HARD CLEANUP — REMOVE ALL AWS RESOURCES
         run: |
           set +e
-          echo "Starting full cleanup..."
+          echo "CLEANUP START"
 
-          aws logs delete-log-group --log-group-name /ecs/airflow 2>/dev/null || true
-
-          CLUSTERS=$(aws ecs list-clusters --query "clusterArns[]" --output text)
+          # ECS — Service → Cluster
+          CLUSTERS=$(aws ecs list-clusters --query 'clusterArns[]' --output text)
           for C in $CLUSTERS; do
-            SERVICES=$(aws ecs list-services --cluster "$C" --query "serviceArns[]" --output text)
+            SERVICES=$(aws ecs list-services --cluster "$C" --query 'serviceArns[]' --output text)
             for S in $SERVICES; do
               aws ecs update-service --cluster "$C" --service "$S" --desired-count 0 || true
               aws ecs delete-service --cluster "$C" --service "$S" --force || true
             done
-          done
-
-          for C in $CLUSTERS; do
             aws ecs delete-cluster --cluster "$C" || true
           done
 
-          SGIDS=$(aws ec2 describe-security-groups \
-            --filters Name=group-name,Values="airflow-ecs-sg","airflow-db-sg" \
-            --query "SecurityGroups[].GroupId" --output text)
+          # ENIs presas nos SG
+          ENIS=$(aws ec2 describe-network-interfaces --query 'NetworkInterfaces[].NetworkInterfaceId' --output text)
+          for E in $ENIS; do
+            aws ec2 delete-network-interface --network-interface-id "$E" || true
+          done
 
+          # SG airflow
+          SGIDS=$(aws ec2 describe-security-groups --query 'SecurityGroups[].GroupId' --output text)
           for SG in $SGIDS; do
-            ENIS=$(aws ec2 describe-network-interfaces \
-              --filters Name=group-id,Values="$SG" \
-              --query "NetworkInterfaces[].NetworkInterfaceId" --output text)
-
-            for ENI in $ENIS; do
-              aws ec2 delete-network-interface --network-interface-id "$ENI" || true
-            done
-
             aws ec2 delete-security-group --group-id "$SG" || true
-          done
+          end
 
-          aws rds delete-db-instance --db-instance-identifier airflow-db --skip-final-snapshot 2>/dev/null || true
-          aws rds delete-db-subnet-group --db-subnet-group-name airflow-default-subnets 2>/dev/null || true
+          # RDS
+          aws rds delete-db-instance --db-instance-identifier airflow-db --skip-final-snapshot || true
+          aws rds delete-db-subnet-group --db-subnet-group-name airflow-default-subnets || true
 
+          # Lambda
+          aws lambda delete-function --function-name ingest-weather-api || true
+
+          # S3 buckets
           for B in raw-weather-* processed-weather-* ml-output-weather-*; do
-            aws s3 rb s3://$B --force 2>/dev/null || true
+            aws s3 rb s3://$B --force || true
           done
 
-          for R in ecsTaskExecutionRole airflow-task-role lambda-ingest-role databricks-instance-profile; do
-            POLICIES=$(aws iam list-attached-role-policies \
-              --role-name "$R" --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null)
-
-            for P in $POLICIES; do
+          # IAM — detach + delete roles
+          ROLE_LIST="ecsTaskExecutionRole airflow-task-role lambda-ingest-role databricks-instance-profile"
+          for R in $ROLE_LIST; do
+            POLS=$(aws iam list-attached-role-policies --role-name "$R" --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null)
+            for P in $POLS; do
               aws iam detach-role-policy --role-name "$R" --policy-arn "$P" || true
             done
-
-            aws iam delete-role --role-name "$R" 2>/dev/null || true
+            aws iam delete-role --role-name "$R" || true
           done
 
-          for P in airflow-access-policy lambda-ingest-policy databricks-s3-access; do
-            ARN=$(aws iam list-policies --scope Local \
-              --query "Policies[?PolicyName=='$P'].Arn" --output text)
-            if [ -n "$ARN" ]; then
-              aws iam delete-policy --policy-arn "$ARN" || true
-            fi
+          # IAM — delete policies
+          POLICY_LIST="airflow-access-policy lambda-ingest-policy databricks-s3-access"
+          for PN in $POLICY_LIST; do
+            ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='$PN'].Arn" --output text)
+            if [ "$ARN" != "None" ]; then aws iam delete-policy --policy-arn "$ARN" || true; fi
           done
 
-          echo "Cleanup completed."
+          # Logs
+          aws logs delete-log-group --log-group-name /ecs/airflow || true
+
+          echo "CLEANUP FINISHED"
           set -e
+
+
+      ###########################################################################
+      # CONTINUA COM EXPORT TF VARS / BUILD IMAGE / DEPLOY NORMAL
+      ###########################################################################
 
       - name: Export TF variables
         run: |
@@ -119,7 +126,6 @@ jobs:
           REPO=${{ env.ECR_REPO }}
           IMAGE_URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${SHORT_SHA}"
           echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
-          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
 
       - name: Ensure ECR repository exists
         run: |
@@ -150,40 +156,6 @@ jobs:
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: terraform init -input=false
 
-      - name: Terraform Apply or Destroy
+      - name: Terraform Apply
         working-directory: ${{ env.TERRAFORM_DIR }}
-        run: |
-          if [ "${{ github.event.inputs.destroy }}" == "true" ]; then
-            terraform apply -destroy -auto-approve
-          else
-            terraform apply -auto-approve
-          fi
-
-      - name: Register Databricks Instance Profile
-        if: ${{ github.event.inputs.destroy != 'true' }}
-        run: |
-          INSTANCE_PROFILE_ARN=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw databricks_instance_profile_arn 2>/dev/null || true)
-          if [ -n "$INSTANCE_PROFILE_ARN" ]; then
-            DATABRICKS_HOST="${{ secrets.DATABRICKS_HOST }}"
-            DATABRICKS_TOKEN="${{ secrets.DATABRICKS_TOKEN }}"
-            curl -s -X POST \
-              -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "{\"instance_profile_arn\": \"${INSTANCE_PROFILE_ARN}\"}" \
-              "${DATABRICKS_HOST}/api/2.0/instance-profiles/add" || true
-          fi
-
-      - name: Force ECS new deployment
-        if: ${{ github.event.inputs.destroy != 'true' }}
-        run: |
-          CLUSTER_NAME=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw ecs_cluster_name 2>/dev/null || true)
-          SERVICE_NAME=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw airflow_service_name 2>/dev/null || true)
-          if [ -n "$CLUSTER_NAME" ] && [ -n "$SERVICE_NAME" ]; then
-            aws ecs update-service \
-              --cluster "$CLUSTER_NAME" \
-              --service "$SERVICE_NAME" \
-              --force-new-deployment
-          fi
-
-      - name: Done
-        run: echo "Deploy pipeline finished."
+        run: terraform apply -auto-approve

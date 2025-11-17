@@ -40,6 +40,11 @@ resource "databricks_job" "transform_job" {
       num_workers   = 1
       spark_version = "13.3.x-scala2.12"
       node_type_id  = var.node_type
+
+      aws_attributes {
+        ebs_volume_type = "GENERAL_PURPOSE_SSD"
+        ebs_volume_size = 100
+      }
     }
   }
 
@@ -47,9 +52,6 @@ resource "databricks_job" "transform_job" {
     task_key = "transform_task"
     notebook_task {
       notebook_path = databricks_notebook.transform.path
-      base_parameters = {
-        project_id = var.project_id
-      }
     }
     job_cluster_key = "transform_cluster"
   }
@@ -65,6 +67,11 @@ resource "databricks_job" "train_job" {
       num_workers   = 1
       spark_version = "13.3.x-scala2.12"
       node_type_id  = var.node_type
+
+      aws_attributes {
+        ebs_volume_type = "GENERAL_PURPOSE_SSD"
+        ebs_volume_size = 100
+      }
     }
   }
 
@@ -72,9 +79,6 @@ resource "databricks_job" "train_job" {
     task_key = "train_task"
     notebook_task {
       notebook_path = databricks_notebook.ml_train.path
-      base_parameters = {
-        project_id = var.project_id
-      }
     }
     job_cluster_key = "train_cluster"
   }
@@ -90,6 +94,11 @@ resource "databricks_job" "infer_job" {
       num_workers   = 1
       spark_version = "13.3.x-scala2.12"
       node_type_id  = var.node_type
+
+      aws_attributes {
+        ebs_volume_type = "GENERAL_PURPOSE_SSD"
+        ebs_volume_size = 100
+      }
     }
   }
 
@@ -97,9 +106,6 @@ resource "databricks_job" "infer_job" {
     task_key = "infer_task"
     notebook_task {
       notebook_path = databricks_notebook.ml_infer.path
-      base_parameters = {
-        project_id = var.project_id
-      }
     }
     job_cluster_key = "infer_cluster"
   }
