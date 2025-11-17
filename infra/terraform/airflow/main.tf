@@ -73,7 +73,7 @@ resource "aws_security_group" "airflow_db" {
 # RDS
 # -------------------------------
 resource "aws_db_subnet_group" "default_subnets" {
-  name       = "airflow-default-subnets"
+  name       = "airflow-default-subnets-2"
   subnet_ids = data.aws_subnets.default.ids
 }
 
