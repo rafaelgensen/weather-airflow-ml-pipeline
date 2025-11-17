@@ -24,7 +24,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/heads/prod/') || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout
@@ -37,7 +36,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Export TF variables
+      - name: Export TF vars
         run: |
           echo "TF_VAR_project_id=${{ secrets.AWS_ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "TF_VAR_region=${{ env.AWS_REGION }}" >> $GITHUB_ENV
@@ -45,18 +44,63 @@ jobs:
           echo "TF_VAR_databricks_host=${{ secrets.DATABRICKS_HOST }}" >> $GITHUB_ENV
           echo "TF_VAR_databricks_token=${{ secrets.DATABRICKS_TOKEN }}" >> $GITHUB_ENV
 
+      #####################################################################
+      # DESTROY TRIGGER: workflow_dispatch OR commit contains [DESTROY]
+      #####################################################################
+      - name: Detect destroy flag
+        id: destroy_check
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          INPUT="${{ github.event.inputs.destroy }}"
+
+          if [[ "$INPUT" == "true" ]]; then
+            echo "RUN_DESTROY=true" >> $GITHUB_ENV
+          elif echo "$MSG" | grep -qi "\[DESTROY\]"; then
+            echo "RUN_DESTROY=true" >> $GITHUB_ENV
+          else
+            echo "RUN_DESTROY=false" >> $GITHUB_ENV
+          fi
+
+      - name: Show destroy decision
+        run: |
+          echo "RUN_DESTROY = ${{ env.RUN_DESTROY }}"
+
+      #####################################################################
+      # DESTROY IF NEEDED
+      #####################################################################
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.7
+
+      - name: Terraform Init
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform Destroy
+        if: env.RUN_DESTROY == 'true'
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: terraform destroy -auto-approve
+
+      #####################################################################
+      # STOP THE PIPELINE AFTER DESTROY
+      #####################################################################
+      - name: Stop after destroy
+        if: env.RUN_DESTROY == 'true'
+        run: exit 0
+
+      #####################################################################
+      # NORMAL APPLY (only when NOT destroying)
+      #####################################################################
       - name: Define image tag and URI
         id: ecr_info
         run: |
           SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-8)
-          ACCOUNT=${{ secrets.AWS_ACCOUNT_ID }}
-          REGION=${{ env.AWS_REGION }}
-          REPO=${{ env.ECR_REPO }}
-          IMAGE_URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${SHORT_SHA}"
+          IMAGE_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${SHORT_SHA}"
           echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
           echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
 
-      - name: Ensure ECR repository exists
+      - name: Ensure ECR repo exists
         run: |
           aws ecr describe-repositories --repository-names "${{ env.ECR_REPO }}" >/dev/null 2>&1 || \
             aws ecr create-repository --repository-name "${{ env.ECR_REPO }}" >/dev/null
@@ -72,66 +116,13 @@ jobs:
           docker build -t "${IMAGE_URI}" ./airflow
           docker push "${IMAGE_URI}"
 
-      - name: Export image for Terraform
+      - name: Export image for TF
         run: |
           echo "TF_VAR_airflow_image=${IMAGE_URI}" >> $GITHUB_ENV
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.7
-
-      - name: Terraform Init
-        working-directory: ${{ env.TERRAFORM_DIR }}
-        run: terraform init -input=false
-
-      ######################################################################
-      # DESTROY ALL — SEMPRE VISÍVEL — EXECUTA SOMENTE SE destroy == true
-      ######################################################################
-      - name: Terraform Destroy All
-        if: ${{ always() }}
-        working-directory: ${{ env.TERRAFORM_DIR }}
-        run: |
-          echo "Destroy flag = '${{ github.event.inputs.destroy }}'"
-          if [ "${{ github.event.inputs.destroy }}" = "true" ]; then
-            echo "Running Terraform Destroy..."
-            terraform destroy -auto-approve
-            exit 0
-          else
-            echo "Skipping destroy step."
-          fi
-
-      ######################################################################
-      # APPLY — SÓ EXECUTA SE destroy == false
-      ######################################################################
       - name: Terraform Apply
-        if: ${{ github.event.inputs.destroy != 'true' }}
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: terraform apply -auto-approve
 
-      - name: Register Databricks Instance Profile
-        if: ${{ github.event.inputs.destroy != 'true' }}
-        run: |
-          INSTANCE_PROFILE_ARN=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw databricks_instance_profile_arn 2>/dev/null || true)
-          if [ -n "$INSTANCE_PROFILE_ARN" ]; then
-            curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.DATABRICKS_TOKEN }}" \
-              -H "Content-Type: application/json" \
-              -d "{\"instance_profile_arn\": \"${INSTANCE_PROFILE_ARN}\"}" \
-              "${{ secrets.DATABRICKS_HOST }}/api/2.0/instance-profiles/add" || true
-          fi
-
-      - name: Force ECS new deployment
-        if: ${{ github.event.inputs.destroy != 'true' }}
-        run: |
-          CLUSTER_NAME=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw ecs_cluster_name 2>/dev/null || true)
-          SERVICE_NAME=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw airflow_service_name 2>/dev/null || true)
-          if [ -n "$CLUSTER_NAME" ] && [ -n "$SERVICE_NAME" ]; then
-            aws ecs update-service \
-              --cluster "$CLUSTER_NAME" \
-              --service "$SERVICE_NAME" \
-              --force-new-deployment
-          fi
-
       - name: Done
-        run: echo "Deploy pipeline finished."
+        run: echo "Pipeline finished."
