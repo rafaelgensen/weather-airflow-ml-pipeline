@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       destroy:
-        description: "Destroy resources first?"
+        description: "Destroy resources?"
         required: true
-        default: "true"
+        default: "false"
         type: choice
-        options: ["true", "false"]
+        options: ["false", "true"]
 
 permissions:
   contents: read
@@ -24,6 +24,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/heads/prod/') || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout
@@ -84,40 +85,53 @@ jobs:
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: terraform init -input=false
 
-      ###############################################################
-      #   FULL CLEANUP BEFORE APPLY (THE CORRECT, DOCUMENTED WAY)   #
-      ###############################################################
-
-      - name: Remove drifted resources from state
-        if: ${{ github.event.inputs.destroy == 'true' }}
+      ######################################################################
+      # DESTROY ALL — SEMPRE VISÍVEL — EXECUTA SOMENTE SE destroy == true
+      ######################################################################
+      - name: Terraform Destroy All
+        if: ${{ always() }}
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: |
-          terraform state rm module.airflow.aws_cloudwatch_log_group.airflow || true
-          terraform state rm module.airflow.aws_security_group.airflow_ecs || true
-          terraform state rm module.airflow.aws_db_subnet_group.default_subnets || true
-          terraform state rm module.s3.aws_s3_bucket.raw || true
-          terraform state rm module.s3.aws_s3_bucket.processed || true
-          terraform state rm module.s3.aws_s3_bucket.ml_output || true
-          terraform state rm module.iam.aws_iam_role.ecs_execution_role || true
-          terraform state rm module.iam.aws_iam_role.airflow_task_role || true
-          terraform state rm module.iam.aws_iam_role.lambda_role || true
-          terraform state rm module.iam.aws_iam_role.databricks_instance_profile || true
-          terraform state rm module.iam.aws_iam_policy.airflow_policy || true
-          terraform state rm module.iam.aws_iam_policy.lambda_policy || true
-          terraform state rm module.iam.aws_iam_policy.databricks_s3_policy || true
+          echo "Destroy flag = '${{ github.event.inputs.destroy }}'"
+          if [ "${{ github.event.inputs.destroy }}" = "true" ]; then
+            echo "Running Terraform Destroy..."
+            terraform destroy -auto-approve
+            exit 0
+          else
+            echo "Skipping destroy step."
+          fi
 
-      - name: Terraform Destroy All
-        if: ${{ github.event.inputs.destroy == 'true' }}
-        working-directory: ${{ env.TERRAFORM_DIR }}
-        run: terraform destroy -auto-approve
-
-      ###############################################
-      #                   APPLY                     #
-      ###############################################
-
+      ######################################################################
+      # APPLY — SÓ EXECUTA SE destroy == false
+      ######################################################################
       - name: Terraform Apply
+        if: ${{ github.event.inputs.destroy != 'true' }}
         working-directory: ${{ env.TERRAFORM_DIR }}
         run: terraform apply -auto-approve
 
+      - name: Register Databricks Instance Profile
+        if: ${{ github.event.inputs.destroy != 'true' }}
+        run: |
+          INSTANCE_PROFILE_ARN=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw databricks_instance_profile_arn 2>/dev/null || true)
+          if [ -n "$INSTANCE_PROFILE_ARN" ]; then
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.DATABRICKS_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"instance_profile_arn\": \"${INSTANCE_PROFILE_ARN}\"}" \
+              "${{ secrets.DATABRICKS_HOST }}/api/2.0/instance-profiles/add" || true
+          fi
+
+      - name: Force ECS new deployment
+        if: ${{ github.event.inputs.destroy != 'true' }}
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw ecs_cluster_name 2>/dev/null || true)
+          SERVICE_NAME=$(terraform -chdir=${{ env.TERRAFORM_DIR }} output -raw airflow_service_name 2>/dev/null || true)
+          if [ -n "$CLUSTER_NAME" ] && [ -n "$SERVICE_NAME" ]; then
+            aws ecs update-service \
+              --cluster "$CLUSTER_NAME" \
+              --service "$SERVICE_NAME" \
+              --force-new-deployment
+          fi
+
       - name: Done
-        run: echo "Finished."
+        run: echo "Deploy pipeline finished."
