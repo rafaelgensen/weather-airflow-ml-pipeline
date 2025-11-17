@@ -30,6 +30,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate Databricks Token
+        run: |
+          echo "Validating Databricks Token..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.DATABRICKS_TOKEN }}" \
+            "${{ secrets.DATABRICKS_HOST }}/api/2.0/clusters/list")
+
+          if [ "$STATUS" != "200" ]; then
+            echo "ERROR: Invalid Databricks token. HTTP status: $STATUS"
+            exit 1
+          fi
+
+          echo "Databricks token is valid."
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
         with:
