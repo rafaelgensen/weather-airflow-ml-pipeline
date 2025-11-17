@@ -27,22 +27,32 @@ jobs:
     if: startsWith(github.ref, 'refs/heads/prod/') || github.event_name == 'workflow_dispatch'
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------
+      # TOKEN CHECK CORRIGIDO
+      # ------------------------------------------------------
       - name: Validate Databricks Token
         run: |
           echo "Validating Databricks Token..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.DATABRICKS_TOKEN }}" \
-            "${{ secrets.DATABRICKS_HOST }}/api/2.0/clusters/list")
+
+          STATUS=$(curl --fail -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            "${DATABRICKS_HOST}/api/2.0/clusters/list" || echo "FAIL")
 
           if [ "$STATUS" != "200" ]; then
             echo "ERROR: Invalid Databricks token. HTTP status: $STATUS"
             exit 1
           fi
 
-          echo "Databricks token is valid."
+          echo "Databricks token OK."
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+      # ------------------------------------------------------
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
